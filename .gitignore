@@ -4,3 +4,8 @@
 *~
 .DS_Store
 pintos/**/build
+.metadata
+pintos/.metadata
+pintos/.cproject
+pintos/.project
+pintos/.settings
