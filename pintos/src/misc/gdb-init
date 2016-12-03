@@ -1,0 +1,4 @@
+# We're assuming that the target is always at this address.
+target remote localhost:1234
+
+source gdb-macros
