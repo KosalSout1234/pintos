@@ -1,4 +1,4 @@
 # We're assuming that the target is always at this address.
 target remote localhost:1234
 
-source gdb-macros
+source /home/stuart/operating_systems/group0/pintos/src/misc/gdb-macros
