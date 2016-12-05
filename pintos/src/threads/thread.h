@@ -16,6 +16,14 @@ enum thread_status
     THREAD_DYING        /* About to be destroyed. */
   };
 
+enum thread_blocked_reason { UNKNOWN, SLEEPING };
+struct thread_blocked {
+	enum thread_blocked_reason reason;
+	union {
+		int sleeping_wakeup_time;
+	};
+};
+
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
@@ -87,6 +95,7 @@ struct thread
     /* Owned by thread.c. */
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
+    struct thread_blocked blocked; 	    /* If thread is blocked, extra data needed to know when to unblock it. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
@@ -119,6 +128,7 @@ typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void thread_block (void);
+void thread_sleep_until (int64_t ticks);
 void thread_unblock (struct thread *);
 
 struct thread *thread_current (void);

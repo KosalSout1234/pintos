@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include "devices/timer.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -27,6 +28,10 @@ static struct list ready_list;
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
+
+/* List of processes in THREAD_BLOCKED state that are SLEEPING.
+   This list should always be sorted by ascending wake up time. */
+static struct list blocked_sleeping_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -92,6 +97,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&blocked_sleeping_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -117,6 +123,26 @@ thread_start (void)
   sema_down (&idle_started);
 }
 
+static void try_wake_up_sleeping_threads(void) {
+	int64_t ticks = timer_ticks();
+	while (true) {
+	  if (list_empty(&blocked_sleeping_list)) {
+	    return;
+	  }
+    struct list_elem *it = list_front(&blocked_sleeping_list);
+    struct thread *t = list_entry(it, struct thread, elem);
+    if (t->blocked.sleeping_wakeup_time > ticks) {
+      // blocked_sleeping_list sorted by ascending wakeup time. Therefore if
+      // the first wake up is in the future, then all of them are.
+      return;
+    }
+    // Must pop from blocked sleeping list before adding thread to the ready list.
+    // Otherwise thread.elem will be in 2 lists simultaneously, which isn't allowed.
+    list_pop_front(&blocked_sleeping_list);
+    thread_unblock(t);
+  }
+}
+
 /* Called by the timer interrupt handler at each timer tick.
    Thus, this function runs in an external interrupt context. */
 void
@@ -133,6 +159,8 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+
+  try_wake_up_sleeping_threads();
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -218,6 +246,33 @@ thread_block (void)
 
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
+}
+
+static bool sleeping_thread_less_func (const struct list_elem *a,
+                                       const struct list_elem *b,
+                                       void *aux UNUSED) {
+  struct thread *thread_a = list_entry(a, struct thread, elem);
+  struct thread *thread_b = list_entry(b, struct thread, elem);
+  return thread_a->blocked.sleeping_wakeup_time < thread_b->blocked.sleeping_wakeup_time;
+}
+
+void
+thread_sleep_until (int64_t ticks) {
+  struct thread *cur = thread_current ();
+  enum intr_level old_level;
+
+  ASSERT (!intr_context ());
+
+  old_level = intr_disable ();
+  cur->status = THREAD_BLOCKED;
+  cur->blocked.reason = SLEEPING;
+  cur->blocked.sleeping_wakeup_time = ticks;
+  if (cur != idle_thread) {
+    list_insert_ordered(&blocked_sleeping_list, &cur->elem, sleeping_thread_less_func, NULL);
+  }
+
+  schedule ();
+  intr_set_level (old_level);
 }
 
 /* Transitions a blocked thread T to the ready-to-run state.
