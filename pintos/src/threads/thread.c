@@ -185,11 +185,7 @@ thread_print_stats (void)
    before thread_create() returns.  Contrariwise, the original
    thread may run for any amount of time before the new thread is
    scheduled.  Use a semaphore or some other form of
-   synchronization if you need to ensure ordering.
-
-   The code provided sets the new thread's `priority' member to
-   PRIORITY, but no actual priority scheduling is implemented.
-   Priority scheduling is the goal of Problem 1-3. */
+   synchronization if you need to ensure ordering. */
 tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux) 
@@ -226,8 +222,12 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  /* Add to run queue. */
+  /* Add to ready queue. */
   thread_unblock (t);
+
+  if (priority > thread_current()->priority) {
+    thread_yield();
+  }
 
   return tid;
 }
@@ -246,6 +246,14 @@ thread_block (void)
 
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
+}
+
+void
+thread_set_block_reason_waiting_on_lock (struct lock* lock) {
+  struct thread_blocked blocked_reason = {
+      WAITING_ON_LOCK, .lock = lock
+  };
+  thread_current()->blocked = blocked_reason;
 }
 
 static bool sleeping_thread_less_func (const struct list_elem *a,
@@ -275,6 +283,15 @@ thread_sleep_until (int64_t ticks) {
   intr_set_level (old_level);
 }
 
+// Threads with higher priority come before threads with lower priority.
+static bool priority_thread_less_func(const struct list_elem *a,
+                                      const struct list_elem *b,
+                                      void *aux __attribute__ ((unused))) {
+  struct thread *thread_a = list_entry(a, struct thread, elem);
+  struct thread *thread_b = list_entry(b, struct thread, elem);
+  return thread_get_effective_priority(thread_a) > thread_get_effective_priority(thread_b);
+}
+
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -292,8 +309,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, priority_thread_less_func, NULL);
   t->status = THREAD_READY;
+  t->blocked.reason = UNKNOWN;
   intr_set_level (old_level);
 }
 
@@ -363,7 +381,7 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered(&ready_list, &cur->elem, priority_thread_less_func, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -391,13 +409,65 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  // Re-run priority scheduling.
+  thread_yield();
 }
 
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  return thread_get_effective_priority(thread_current());
+}
+
+static void thread_receive_donated_priority(struct thread* t, int donated_priority) {
+  if (donated_priority > t->donated_priority) {
+    t->donated_priority = donated_priority;
+    if (t->status == THREAD_READY) {
+      list_remove(&t->elem);
+      list_insert_ordered(&ready_list, &t->elem, priority_thread_less_func, NULL);
+    }
+  }
+}
+
+/* Set the priority of the receiver thread. If the receiver thread is blocked
+ * on waiting for a lock, then the lock owner will also have it's priority set.
+ * This priority-setting continues recursively until a thread that isn't
+ * waiting on a lock is found.
+ *
+ * Must be called with interrupts disabled. Expectation is that a scheduling decision
+ * will be run shortly after this executes. */
+void
+thread_donate_priority(struct thread* receiver, int priority) {
+  // The donated priority should be the greatest of all waiting threads.
+  thread_receive_donated_priority(receiver, priority);
+  struct thread* cur_thread = receiver;
+  while (cur_thread->status == THREAD_BLOCKED && cur_thread->blocked.reason == WAITING_ON_LOCK) {
+    cur_thread = cur_thread->blocked.lock->holder;
+    thread_receive_donated_priority(cur_thread, priority);
+  }
+}
+
+int thread_get_effective_priority(struct thread* t) {
+  return (t->donated_priority > t->priority) ? t->donated_priority : t->priority;
+}
+
+/* Calculate the effective priority of a thread. Taking donated priorities into account. Should be called with interrupts disabled. */
+int thread_calculate_donated_priority(struct thread* t) {
+  // Take maximum priority of threads waiting on owned locks.
+  int max_priority = 0;
+  for (struct list_elem* elem = list_begin(&t->owned_locks) ; elem != list_end(&t->owned_locks); elem = list_next(elem)) {
+    struct lock* lock = list_entry (elem, struct lock, elem);
+    struct list* waiting_thread_list = &lock->semaphore.waiters;
+    for (struct list_elem* thread_elem = list_begin(waiting_thread_list) ; thread_elem != list_end(waiting_thread_list); thread_elem = list_next(thread_elem)) {
+      struct thread* waiting_thread = list_entry (thread_elem, struct thread, elem);
+      int waiter_effective_priority = thread_get_effective_priority(waiting_thread);
+      if (waiter_effective_priority > max_priority) {
+        max_priority = waiter_effective_priority;
+      }
+    }
+  }
+  return max_priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -514,10 +584,13 @@ init_thread (struct thread *t, const char *name, int priority)
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
+  t->blocked.reason = UNKNOWN;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->donated_priority = 0;
   t->magic = THREAD_MAGIC;
+  list_init(&t->owned_locks);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

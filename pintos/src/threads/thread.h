@@ -16,11 +16,12 @@ enum thread_status
     THREAD_DYING        /* About to be destroyed. */
   };
 
-enum thread_blocked_reason { UNKNOWN, SLEEPING };
+enum thread_blocked_reason { UNKNOWN, SLEEPING, WAITING_ON_LOCK };
 struct thread_blocked {
 	enum thread_blocked_reason reason;
 	union {
-		int sleeping_wakeup_time;
+		int sleeping_wakeup_time; // SLEEPING
+		struct lock* lock; // WAITING_ON_LOCK
 	};
 };
 
@@ -99,6 +100,8 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+    int donated_priority;               /* Current donated priority. */
+    struct list owned_locks;            /* Pointers to locks owned by thread. */
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -128,6 +131,7 @@ typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void thread_block (void);
+void thread_set_block_reason_waiting_on_lock (struct lock*);
 void thread_sleep_until (int64_t ticks);
 void thread_unblock (struct thread *);
 
@@ -144,6 +148,9 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void thread_donate_priority(struct thread*, int);
+int thread_get_effective_priority(struct thread*);
+int thread_calculate_donated_priority(struct thread*);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
