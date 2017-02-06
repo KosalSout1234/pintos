@@ -66,6 +66,12 @@ fix_add (fixed_point_t x, fixed_point_t y)
   return __mk_fix (x.f + y.f);
 }
 
+static inline fixed_point_t
+fix_increment (fixed_point_t x)
+{
+  return __mk_fix (x.f + FIX_F);
+}
+
 /* Returns X - Y. */
 static inline fixed_point_t
 fix_sub (fixed_point_t x, fixed_point_t y) 

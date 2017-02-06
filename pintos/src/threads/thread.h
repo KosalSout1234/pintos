@@ -101,8 +101,11 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     int donated_priority;               /* Current donated priority. */
+    fixed_point_t recent_cpu;           /* Amount of CPU time thread has received recently. */
+    int nice;                           /* How "nice" should the thread be to other threads. */
     struct list owned_locks;            /* Pointers to locks owned by thread. */
     struct list_elem allelem;           /* List element for all threads list. */
+    struct list_elem mlfq_elem;         /* List element for the MLFQ queue. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
